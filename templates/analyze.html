@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Analyze</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+        .twitter-results {
+            margin-top: 20px;
+        }
+        .tweet {
+            border: 1px solid #e1e8ed;
+            border-radius: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            transition: transform 0.2s;
+        }
+        .tweet:hover {
+            transform: translateY(-2px);
+        }
+        .alert {
+            margin: 15px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .alert-info {
+            background-color: #e9f5ff;
+            border-color: #b8daff;
+            color: #004085;
+        }
+        .alert-error {
+            background-color: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Sentiment Analysis Results</h1>
+
+        <!-- Instagram Results -->
+        {% if instagram_results %}
+            <div class="section-title">Instagram Analysis</div>
+            {% for result in instagram_results %}
+                <div class="analysis-container">
+                    <div class="media-container">
+                        {% if result.media_type == 'IMAGE' %}
+                            <img src="{{ result.media_url }}" alt="Instagram post">
+                        {% elif result.media_type == 'VIDEO' %}
+                            <video controls>
+                                <source src="{{ result.media_url }}" type="video/mp4">
+                                Your browser does not support the video tag.
+                            </video>
+                        {% endif %}
+                        <h3>Caption:</h3>
+                        <p>{{ result.caption }}</p>
+                    </div>
+                    <div class="sentiment-container">
+                        <h3>Caption Sentiment:</h3>
+                        <p>Positive: {{ result.caption_sentiment.pos }}</p>
+                        <p>Negative: {{ result.caption_sentiment.neg }}</p>
+                        <p>Neutral: {{ result.caption_sentiment.neu }}</p>
+                        <p>Compound: {{ result.caption_sentiment.compound }}</p>
+                        
+                        <h3>Comments Analysis:</h3>
+                        {% if result.comments %}
+                            <p>Total comments: {{ result.comments|length }}</p>
+                            {% for comment in result.comments %}
+                                {% if comment.text %}
+                                    <div class="comment">
+                                        <p>{{ comment.text }}</p>
+                                        {% if comment.sentiment %}
+                                            <p>Positive: {{ comment.sentiment.pos }}</p>
+                                            <p>Negative: {{ comment.sentiment.neg }}</p>
+                                            <p>Neutral: {{ comment.sentiment.neu }}</p>
+                                            <p>Compound: {{ comment.sentiment.compound }}</p>
+                                        {% else %}
+                                            <p>Sentiment analysis not available</p>
+                                        {% endif %}
+                                    </div>
+                                {% endif %}
+                            {% endfor %}
+                        {% else %}
+                            <p>No comments available.</p>
+                        {% endif %}
+                    </div>
+                </div>
+                <hr>
+            {% endfor %}
+        {% else %}
+            <p>No Instagram results to display.</p>
+        {% endif %}
+
+        <!-- Twitter Results -->
+        <div class="twitter-results">
+            <h2>Twitter Analysis</h2>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        {% if 'Twitter API Error' in message %}
+                            <div class="alert alert-{{ category }}">
+                                {{ message }}
+                            </div>
+                        {% endif %}
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            
+            {% if twitter_results %}
+                {% for tweet in twitter_results %}
+                    <div class="tweet card mb-3">
+                        <div class="card-body">
+                            <div class="d-flex align-items-center mb-2">
+                                {% if tweet.profile_image %}
+                                    <img src="{{ tweet.profile_image }}" alt="{{ tweet.author }}" class="rounded-circle me-2" style="width: 40px; height: 40px;">
+                                {% endif %}
+                                <div>
+                                    <strong>{{ tweet.author }}</strong>
+                                    <small class="text-muted">@{{ tweet.username }}</small>
+                                </div>
+                            </div>
+                            <p class="card-text">{{ tweet.text }}</p>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <small class="text-muted">{{ tweet.created_at }}</small>
+                                <span class="badge bg-{% if tweet.sentiment_label == 'Positive 😊' %}success{% elif tweet.sentiment_label == 'Negative 😡' %}danger{% else %}secondary{% endif %}">
+                                    {{ tweet.sentiment_label }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div class="alert alert-info">
+                    No tweets found for the given search criteria.
+                </div>
+            {% endif %}
+        </div>
+
+        <a href="{{ url_for('home') }}" class="btn" style="margin-top: 2rem;">Back to Home</a>
+    </div>
+</body>
+</html>

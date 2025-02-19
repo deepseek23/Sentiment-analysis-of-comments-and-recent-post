@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div class="navbar">
+        <a href="{{ url_for('login') }}">Login</a>
+        <a href="{{ url_for('register') }}">Register</a>
+    </div>
+    
+    <div class="container">
+        <div class="card" style="max-width: 800px; margin: 2rem auto; text-align: center;">
+            <h1 style="margin-bottom: 1.5rem;">Welcome to Sentiment Analyzer</h1>
+            <p style="font-size: 1.1rem; margin-bottom: 2rem;">
+                Analyze the sentiment of your Instagram posts and comments
+            </p>
+            <div style="display: flex; gap: 1rem; justify-content: center;">
+                <a href="{{ url_for('login') }}" class="btn">Login</a>
+                <a href="{{ url_for('register') }}" class="btn">Register</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
