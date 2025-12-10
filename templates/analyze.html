@@ -94,20 +94,52 @@
 
         <!-- Twitter Results -->
         <div class="twitter-results">
-            <h2>Twitter Analysis</h2>
+            <h2>Twitter Post Analysis</h2>
             {% with messages = get_flashed_messages(with_categories=true) %}
                 {% if messages %}
                     {% for category, message in messages %}
-                        {% if 'Twitter API Error' in message %}
-                            <div class="alert alert-{{ category }}">
-                                {{ message }}
-                            </div>
-                        {% endif %}
+                        <div class="alert alert-{{ category }}">
+                            {{ message }}
+                        </div>
                     {% endfor %}
                 {% endif %}
             {% endwith %}
             
+            <!-- Original Tweet/Post -->
+            {% if twitter_post_data %}
+                <div style="background-color: #f9f9f9; padding: 20px; border-radius: 10px; margin-bottom: 20px; border-left: 4px solid #1da1f2;">
+                    <h3>Original Post</h3>
+                    <div class="tweet card mb-3">
+                        <div class="card-body">
+                            <div class="d-flex align-items-center mb-2">
+                                {% if twitter_post_data.profile_image %}
+                                    <img src="{{ twitter_post_data.profile_image }}" alt="{{ twitter_post_data.author }}" class="rounded-circle me-2" style="width: 40px; height: 40px;">
+                                {% endif %}
+                                <div>
+                                    <strong>{{ twitter_post_data.author }}</strong>
+                                    <small class="text-muted">@{{ twitter_post_data.username }}</small>
+                                </div>
+                            </div>
+                            <p class="card-text">{{ twitter_post_data.text }}</p>
+                            <div class="d-flex justify-content-between align-items-center">
+                                <small class="text-muted">{{ twitter_post_data.created_at }}</small>
+                                <span class="badge bg-{% if twitter_post_data.sentiment_label == 'Positive 😊' %}success{% elif twitter_post_data.sentiment_label == 'Negative 😡' %}danger{% else %}secondary{% endif %}">
+                                    {{ twitter_post_data.sentiment_label }}
+                                </span>
+                            </div>
+                            <div style="margin-top: 10px; padding: 10px; background-color: #f0f0f0; border-radius: 5px;">
+                                <small><strong>Sentiment Analysis:</strong></small><br>
+                                <small>Positive: {{ twitter_post_data.sentiment.pos|round(3) }} | Negative: {{ twitter_post_data.sentiment.neg|round(3) }} | Neutral: {{ twitter_post_data.sentiment.neu|round(3) }} | Compound: {{ twitter_post_data.sentiment.compound|round(3) }}</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            {% endif %}
+            
+            <!-- Replies/Conversation -->
             {% if twitter_results %}
+                <h3>Replies & Conversation Analysis</h3>
+                <p><strong>Total Replies Analyzed: {{ twitter_results|length }}</strong></p>
                 {% for tweet in twitter_results %}
                     <div class="tweet card mb-3">
                         <div class="card-body">
@@ -127,12 +159,17 @@
                                     {{ tweet.sentiment_label }}
                                 </span>
                             </div>
+                            <div style="margin-top: 10px; padding: 10px; background-color: #f0f0f0; border-radius: 5px;">
+                                <small><strong>Sentiment:</strong> Positive: {{ tweet.sentiment.pos|round(3) }} | Negative: {{ tweet.sentiment.neg|round(3) }} | Neutral: {{ tweet.sentiment.neu|round(3) }} | Compound: {{ tweet.sentiment.compound|round(3) }}</small>
+                            </div>
                         </div>
                     </div>
                 {% endfor %}
+            {% elif twitter_post_data %}
+                <p style="color: #666;">No replies found for this post.</p>
             {% else %}
                 <div class="alert alert-info">
-                    No tweets found for the given search criteria.
+                    No Twitter post data available. Please provide a Tweet ID in the credentials page.
                 </div>
             {% endif %}
         </div>

@@ -4,6 +4,8 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import requests
 import sqlite3
 import time
+import re
+from typing import Optional, Dict, Any
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # Change this to a secure secret key
@@ -52,8 +54,9 @@ def credentials():
         session['instagram_user_id'] = request.form['user_id']
         session['instagram_access_token'] = request.form['access_token']
         
-        # Store Twitter Bearer Token in session
-        session['twitter_bearer_token'] = request.form['twitter_bearer_token']
+        # Store Twitter Bearer Token and Tweet ID in session (tweet id optional)
+        session['twitter_bearer_token'] = request.form.get('twitter_bearer_token', '').strip()
+        session['twitter_post_id'] = request.form.get('twitter_post_id', '').strip()
         
         # Verify Instagram access token permissions
         verify_url = f"https://graph.instagram.com/me?fields=id,username&access_token={session['instagram_access_token']}"
@@ -69,7 +72,7 @@ def credentials():
         
         if permissions_response.status_code == 200:
             permissions = permissions_response.json().get('data', [])
-            has_comment_permission = any(p['permission'] == 'instagram_graph_manage_comments' for p in permissions)
+            has_comment_permission = any(p.get('permission') == 'instagram_graph_manage_comments' for p in permissions)
             
             if not has_comment_permission:
                 flash('Your access token does not have permission to read comments. Please ensure your Instagram account is a Business or Creator account and that you have granted the "instagram_graph_manage_comments" permission.', 'warning')
@@ -121,7 +124,7 @@ def get_instagram_posts(user_id, access_token):
 # Function to analyze sentiment using VADER
 def analyze_sentiment(text):
     analyzer = SentimentIntensityAnalyzer()
-    return analyzer.polarity_scores(text)
+    return analyzer.polarity_scores(text or "")
 
 @app.route('/')
 def home():
@@ -200,40 +203,259 @@ def analyze():
                     "comments": comments
                 })
 
-    # Twitter Analysis
+    # Twitter Analysis - Analyze specific post/tweet and its replies
     twitter_results = []
-    if 'twitter_bearer_token' in session:
-        tweets_data = get_tweets("AI", count=10, bearer_token=session['twitter_bearer_token'])
-        
-        if tweets_data:
-            if "error" in tweets_data:
-                flash(f"Twitter API Error: {tweets_data['error']}", "error")
-            elif "data" in tweets_data:
-                for tweet in tweets_data["data"]:
-                    user_info = next((u for u in tweets_data.get("includes", {}).get("users", [])
-                                   if u["id"] == tweet["author_id"]), {})
-                    text = tweet["text"]
-                    sentiment = analyze_sentiment(text)
-                    sentiment_label = "Neutral"
-                    if sentiment["compound"] > 0.05:
-                        sentiment_label = "Positive 😊"
-                    elif sentiment["compound"] < -0.05:
-                        sentiment_label = "Negative 😡"
-                    twitter_results.append({
-                        "text": text,
-                        "author": user_info.get("name", "Unknown"),
-                        "username": user_info.get("username", ""),
-                        "profile_image": user_info.get("profile_image_url", ""),
-                        "created_at": tweet.get("created_at", ""),
-                        "sentiment": sentiment,
-                        "sentiment_label": sentiment_label
-                    })
+    twitter_post_data = None
+    if 'twitter_bearer_token' in session and 'twitter_post_id' in session:
+        tweet_id = session['twitter_post_id'].strip()
+        if tweet_id:
+            # Fetch the specific tweet and its replies
+            twitter_data = get_tweet_with_replies(tweet_id, session['twitter_bearer_token'])
+            
+            if twitter_data:
+                if "error" in twitter_data:
+                    flash(f"Twitter API Error: {twitter_data['error']}", "error")
+                elif "data" in twitter_data:
+                    # Process original tweet
+                    original_tweet = twitter_data["data"][0] if twitter_data["data"] else None
+                    if original_tweet:
+                        users_map = {u["id"]: u for u in twitter_data.get("includes", {}).get("users", [])}
+                        user_info = users_map.get(original_tweet.get("author_id"), {})
+                        text = original_tweet["text"]
+                        sentiment = analyze_sentiment(text)
+                        sentiment_label = "Neutral"
+                        if sentiment["compound"] > 0.05:
+                            sentiment_label = "Positive 😊"
+                        elif sentiment["compound"] < -0.05:
+                            sentiment_label = "Negative 😡"
+                        twitter_post_data = {
+                            "text": text,
+                            "author": user_info.get("name", "Unknown"),
+                            "username": user_info.get("username", ""),
+                            "profile_image": user_info.get("profile_image_url", ""),
+                            "created_at": original_tweet.get("created_at", ""),
+                            "sentiment": sentiment,
+                            "sentiment_label": sentiment_label
+                        }
+                    
+                    # Process replies to the tweet
+                    for tweet in twitter_data["data"][1:]:  # Skip original tweet
+                        user_info = users_map.get(tweet.get("author_id"), {})
+                        text = tweet["text"]
+                        sentiment = analyze_sentiment(text)
+                        sentiment_label = "Neutral"
+                        if sentiment["compound"] > 0.05:
+                            sentiment_label = "Positive 😊"
+                        elif sentiment["compound"] < -0.05:
+                            sentiment_label = "Negative 😡"
+                        twitter_results.append({
+                            "text": text,
+                            "author": user_info.get("name", "Unknown"),
+                            "username": user_info.get("username", ""),
+                            "profile_image": user_info.get("profile_image_url", ""),
+                            "created_at": tweet.get("created_at", ""),
+                            "sentiment": sentiment,
+                            "sentiment_label": sentiment_label
+                        })
             else:
-                flash("No tweets found for the given search criteria", "info")
+                flash("Could not fetch Twitter post data. Please check your Tweet ID and credentials.", "error")
+        else:
+            flash("Please provide a Twitter Post ID for analysis.", "info")
 
-    return render_template('analyze.html', instagram_results=instagram_results, twitter_results=twitter_results)
+    return render_template('analyze.html', instagram_results=instagram_results, twitter_results=twitter_results, twitter_post_data=twitter_post_data)
 
-# Function to fetch recent tweets
+# ------------------- New: Tweet ID helper and route -------------------
+
+def extract_tweet_id_from_url(url: str) -> Optional[str]:
+    """
+    Try to extract tweet ID from a standard Twitter URL.
+    Examples:
+      - https://twitter.com/user/status/1234567890123456789
+      - https://mobile.twitter.com/user/status/1234567890123456789
+    """
+    if not url:
+        return None
+    # Look for a long sequence of digits after /status/
+    m = re.search(r'/status/(\d+)', url)
+    if m:
+        return m.group(1)
+    # If the user pasted a raw id
+    if re.fullmatch(r'\d{5,30}', url.strip()):
+        return url.strip()
+    return None
+
+def search_tweet_by_text_or_user(query_input: str, bearer_token: str, max_results: int = 10) -> Optional[Dict[str, Any]]:
+    """
+    Try to find a tweet using Twitter's recent search endpoint.
+    Accepts either:
+      - '@username some text' OR
+      - 'some text'
+    Returns the first matching tweet object (as returned under 'data') or None.
+    Note: Requires valid bearer_token and Twitter API v2 access to recent search.
+    """
+    if not bearer_token or not query_input:
+        return None
+
+    headers = {"Authorization": f"Bearer {bearer_token}"}
+    api_url = "https://api.twitter.com/2/tweets/search/recent"
+
+    # If user included an @username at start, push it into from:username
+    query_input = query_input.strip()
+    username_match = re.match(r'^@?([A-Za-z0-9_]{1,15})\s+(.+)$', query_input)
+    if username_match:
+        username = username_match.group(1)
+        content = username_match.group(2)
+        query = f'from:{username} "{content}"'
+    else:
+        # If the input is short, use quoted exact search, otherwise plain search
+        if len(query_input) <= 60:
+            query = f'"{query_input}"'
+        else:
+            query = query_input
+
+    params = {
+        "query": query,
+        "max_results": min(max_results, 100),
+        "tweet.fields": "created_at,author_id,text,conversation_id",
+        "expansions": "author_id",
+        "user.fields": "username,name,profile_image_url"
+    }
+
+    try:
+        resp = requests.get(api_url, headers=headers, params=params, timeout=15)
+        if resp.status_code == 200:
+            data = resp.json()
+            if "data" in data and len(data["data"]) > 0:
+                # Return the first match (you could enhance matching logic)
+                return data["data"][0]
+            return None
+        else:
+            # Could surface more info but keep it simple
+            print("Twitter search error:", resp.status_code, resp.text)
+            return None
+    except requests.exceptions.RequestException as e:
+        print("Network/search error:", str(e))
+        return None
+
+@app.route('/fetch_tweet_id', methods=['GET', 'POST'])
+@login_required
+def fetch_tweet_id():
+    """
+    New route to find a tweet id either from a pasted tweet URL or by searching text/username.
+    Form fields expected:
+      - tweet_url_or_text (string) - either full tweet URL, a numeric id, or '@username text' or tweet text.
+      - optional: twitter_bearer_token (if not already in session)
+    """
+    if request.method == 'POST':
+        input_value = request.form.get('tweet_url_or_text', '').strip()
+        bearer_token = request.form.get('twitter_bearer_token', '').strip() or session.get('twitter_bearer_token', '').strip()
+
+        if not input_value:
+            flash("Please provide a Tweet URL, ID, username+text, or the tweet text to search.", "info")
+            return redirect(url_for('fetch_tweet_id'))
+
+        # First try to extract id directly from url or numeric input
+        tweet_id = extract_tweet_id_from_url(input_value)
+
+        # If not found and we have a bearer token, try searching by text/username
+        if not tweet_id:
+            if not bearer_token:
+                flash("No Tweet ID found in input and no Twitter Bearer Token provided for search.", "error")
+                return redirect(url_for('fetch_tweet_id'))
+
+            found = search_tweet_by_text_or_user(input_value, bearer_token, max_results=10)
+            if found and found.get("id"):
+                tweet_id = found["id"]
+            else:
+                flash("Could not find a matching tweet via Twitter search. Try exact text or include @username.", "warning")
+                return redirect(url_for('fetch_tweet_id'))
+
+        # Save found tweet id to session and optionally in the credentials form
+        session['twitter_post_id'] = tweet_id
+        if bearer_token:
+            session['twitter_bearer_token'] = bearer_token
+        flash(f"Found Tweet ID: {tweet_id} (saved to session)", "success")
+        return redirect(url_for('analyze'))
+
+    # GET: show a simple form (you can style/replace with your template)
+    return render_template('fetch_tweet_id.html')
+
+# ------------------- Existing Twitter helper functions -------------------
+
+# Function to fetch a specific tweet and its conversation/replies
+def get_tweet_with_replies(tweet_id, bearer_token):
+    """Fetch a specific tweet and conversation threads/replies"""
+    if not bearer_token or not tweet_id:
+        print("Error: No Twitter Bearer Token or Tweet ID provided")
+        return None
+    
+    headers = {"Authorization": f"Bearer {bearer_token}"}
+    
+    # First, fetch the specific tweet
+    tweet_url = f"https://api.twitter.com/2/tweets/{tweet_id}"
+    tweet_params = {
+        "tweet.fields": "created_at,conversation_id",
+        "expansions": "author_id",
+        "user.fields": "username,name,profile_image_url"
+    }
+    
+    try:
+        response = requests.get(tweet_url, headers=headers, params=tweet_params, timeout=15)
+        
+        if response.status_code != 200:
+            if response.status_code == 401:
+                return {"error": "Invalid or expired Bearer Token"}
+            elif response.status_code == 404:
+                return {"error": "Tweet not found"}
+            else:
+                return {"error": f"Error {response.status_code}: {response.text}"}
+        
+        tweet_data = response.json()
+        if "error" in tweet_data:
+            return {"error": tweet_data["error"]}
+        
+        # Get conversation ID to fetch replies
+        original_tweet = tweet_data.get("data", {})
+        conversation_id = original_tweet.get("conversation_id", tweet_id)
+        
+        # Fetch all tweets in the conversation (replies)
+        search_url = "https://api.twitter.com/2/tweets/search/recent"
+        search_params = {
+            "query": f"conversation_id:{conversation_id}",
+            "max_results": 100,
+            "tweet.fields": "created_at,author_id",
+            "expansions": "author_id",
+            "user.fields": "username,name,profile_image_url"
+        }
+        
+        search_response = requests.get(search_url, headers=headers, params=search_params, timeout=15)
+        
+        if search_response.status_code == 200:
+            conversation_data = search_response.json()
+            
+            # Combine all data
+            all_tweets = [original_tweet]
+            all_users = tweet_data.get("includes", {}).get("users", [])
+            
+            if "data" in conversation_data:
+                all_tweets.extend(conversation_data["data"])
+            
+            if "includes" in conversation_data and "users" in conversation_data["includes"]:
+                all_users.extend(conversation_data["includes"]["users"])
+            
+            return {
+                "data": all_tweets,
+                "includes": {"users": all_users}
+            }
+        else:
+            # Return just the original tweet if conversation search fails
+            return tweet_data
+            
+    except requests.exceptions.RequestException as e:
+        print(f"Network error: {str(e)}")
+        return {"error": f"Network error: {str(e)}"}
+
+# Function to fetch recent tweets (legacy, can be kept for reference)
 def get_tweets(keyword, count=10, retries=5, bearer_token=None):
     if not bearer_token:
         print("Error: No Twitter Bearer Token provided")
